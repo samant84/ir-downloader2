@@ -116,12 +116,13 @@ jobs:
               echo "   ⚠️ فرمت ناشناخته، بدون تغییر باقی ماند."
             fi
 
-            # ----- مرحله 4: دسته‌بندی و فشرده‌سازی به قطعات 90 مگابایتی -----
+            # ----- مرحله 4: دسته‌بندی و فشرده‌سازی (با جلوگیری از تداخل نام پوشه) -----
             echo "📁 [4/4] دسته‌بندی و ایجاد آرشیو (قطعات 90 مگابایت)..."
             BASENAME_NOEXT="${SAFE_FILENAME%.*}"
-            FOLDER_NAME=$(echo "$BASENAME_NOEXT" | sed 's/[\\/:*?"<>|]/_/g')
-            [ -z "$FOLDER_NAME" ] && FOLDER_NAME="downloaded_file"
+            BASE_FOLDER_NAME=$(echo "$BASENAME_NOEXT" | sed 's/[\\/:*?"<>|]/_/g')
+            [ -z "$BASE_FOLDER_NAME" ] && BASE_FOLDER_NAME="downloaded_file"
 
+            # تشخیص دسته فایل
             MIME=$(file -b --mime-type "$SAFE_FILENAME")
             EXT="${SAFE_FILENAME##*.}"
             if [[ "$MIME" == video/* ]]; then CAT="video"
@@ -131,9 +132,27 @@ jobs:
             else CAT="other"
             fi
 
-            FINAL_DIR="downloads/$CAT/$FOLDER_NAME"
+            # پیدا کردن نام منحصربه‌فرد برای پوشه
+            FINAL_DIR="downloads/$CAT/$BASE_FOLDER_NAME"
+            COUNTER_DIR=1
+            while [ -d "$FINAL_DIR" ]; do
+                FINAL_DIR="downloads/$CAT/${BASE_FOLDER_NAME}_${COUNTER_DIR}"
+                COUNTER_DIR=$((COUNTER_DIR+1))
+            done
             mkdir -p "$FINAL_DIR"
             rm -f "$FINAL_DIR"/*.7z*
+
+            # اگر نام پوشه تغییر کرده، نام فایل داخل آرشیو را نیز هماهنگ می‌کنیم
+            NEW_BASENAME=$(basename "$FINAL_DIR")
+            if [ "$NEW_BASENAME" != "$BASE_FOLDER_NAME" ]; then
+                # تغییر نام فایل اصلی (اضافه کردن شماره قبل از پسوند)
+                BASENAME_FOR_FILE="${SAFE_FILENAME%.*}"
+                EXTENSION="${SAFE_FILENAME##*.}"
+                NEW_SAFE_FILENAME="${BASENAME_FOR_FILE}_${COUNTER_DIR-1}.${EXTENSION}"
+                mv "$SAFE_FILENAME" "$NEW_SAFE_FILENAME"
+                SAFE_FILENAME="$NEW_SAFE_FILENAME"
+                echo "   ℹ️ نام پوشه به دلیل تکراری بودن به $NEW_BASENAME تغییر یافت (فایل داخل آرشیو نیز تغییر نام داد)."
+            fi
 
             if [ -z "${{ github.event.inputs.password }}" ]; then
               7z a -mhe=on -mx=3 -v90m "$FINAL_DIR/archive.7z" "./$SAFE_FILENAME" > /dev/null
@@ -146,7 +165,7 @@ jobs:
             # ----- push تدریجی با تأخیر و تلاش مجدد (۳ بار) -----
             echo "📤 ارسال به مخزن (push تدریجی)..."
             git add "$FINAL_DIR/"
-            if git commit -m "Add $FOLDER_NAME [$(date +'%H:%M:%S')]"; then
+            if git commit -m "Add $(basename "$FINAL_DIR") [$(date +'%H:%M:%S')]"; then
               for i in 1 2 3; do
                 if git push --force-with-lease origin HEAD:${GITHUB_REF#refs/heads/}; then
                   echo "   ✅ push انجام شد."
